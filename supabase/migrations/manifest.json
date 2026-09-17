@@ -1,0 +1,9 @@
+{
+  "migrations": [
+    {
+      "id": "REQ-001/001",
+      "template": "supabase/migrations/templates/001_create_questionnaire_responses.sql.tmpl",
+      "sha256": "fa6531a90948aaf31ea3e56779bd889b15cdd26fc1b331139bec93b52c84ab11"
+    }
+  ]
+}

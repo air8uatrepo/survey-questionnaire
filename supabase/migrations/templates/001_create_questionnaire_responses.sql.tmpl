@@ -1,0 +1,14 @@
+create schema if not exists {{TARGET_SCHEMA}};
+revoke all on schema {{TARGET_SCHEMA}} from public, anon, authenticated;
+
+create table if not exists {{TARGET_SCHEMA}}.questionnaire_responses (
+  id uuid primary key default gen_random_uuid(),
+  nickname text not null constraint questionnaire_responses_nickname_demo_check check (nickname like 'DEMO-REQ-001-20260918-01%'),
+  organization text not null constraint questionnaire_responses_organization_demo_check check (organization like 'DEMO-REQ-001-20260918-01%'),
+  profession text not null constraint questionnaire_responses_profession_demo_check check (profession like 'DEMO-REQ-001-20260918-01%'),
+  job_title text not null constraint questionnaire_responses_job_title_demo_check check (job_title like 'DEMO-REQ-001-20260918-01%'),
+  created_at timestamptz not null default now()
+);
+
+alter table {{TARGET_SCHEMA}}.questionnaire_responses enable row level security;
+revoke all on table {{TARGET_SCHEMA}}.questionnaire_responses from public, anon, authenticated;

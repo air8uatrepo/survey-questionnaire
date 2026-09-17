@@ -17,6 +17,7 @@
     "@supabase/ssr": "0.8.0",
     "@supabase/supabase-js": "2.100.1",
     "next": "16.3.5",
+    "pg": "8.16.3",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "server-only": "0.0.1"
@@ -25,6 +26,7 @@
     "@playwright/test": "1.63.0",
     "@tailwindcss/postcss": "4.2.2",
     "@types/node": "24.10.2",
+    "@types/pg": "8.15.6",
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.3",
     "eslint": "9.39.1",

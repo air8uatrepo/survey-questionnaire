@@ -1,4 +1,10 @@
+import 'server-only';
+
 import type { QuestionnaireResponse, QuestionnaireSubmission } from './questionnaire';
+import { createQuestionnairePool, type Queryable } from './database/pool';
+import { assertDatabaseTarget, resolveDatabaseTarget, type DatabaseTarget } from './database/target-schema';
+
+export type { Queryable } from './database/pool';
 
 type DatabaseQuestionnaireResponse = {
   id: string;
@@ -24,46 +30,61 @@ function recordOperationFailure(operationId: string): void {
   console.error({ operationId });
 }
 
-async function responseTable() {
-  const { createServiceClient } = await import('./supabase/service');
+export type QuestionnaireRepository = {
+  insertResponse(submission: QuestionnaireSubmission): Promise<QuestionnaireResponse>;
+  listResponses(): Promise<QuestionnaireResponse[]>;
+};
 
-  return createServiceClient().from('questionnaire_responses');
+export function createQuestionnaireRepository(
+  queryable: Queryable,
+  target: DatabaseTarget,
+): QuestionnaireRepository {
+  assertDatabaseTarget(target);
+
+  return {
+    async insertResponse(submission) {
+      const operationId = crypto.randomUUID();
+      try {
+        const result = await queryable.query<DatabaseQuestionnaireResponse>(
+          `insert into ${target.tableSql} (nickname, organization, profession, job_title) values ($1, $2, $3, $4) returning id, nickname, organization, profession, job_title, created_at`,
+          [submission.nickname, submission.organization, submission.profession, submission.jobTitle],
+        );
+        const row = result.rows[0];
+        if (row === undefined) {
+          throw new Error('No response returned.');
+        }
+        return toQuestionnaireResponse(row);
+      } catch {
+        recordOperationFailure(operationId);
+        throw new Error('Response persistence failed.');
+      }
+    },
+    async listResponses() {
+      const operationId = crypto.randomUUID();
+      try {
+        const result = await queryable.query<DatabaseQuestionnaireResponse>(
+          `select id, nickname, organization, profession, job_title, created_at from ${target.tableSql} order by created_at desc`,
+        );
+        return result.rows.map(toQuestionnaireResponse);
+      } catch {
+        recordOperationFailure(operationId);
+        throw new Error('Response retrieval failed.');
+      }
+    },
+  };
 }
 
-export async function insertResponse(
-  submission: QuestionnaireSubmission,
-): Promise<QuestionnaireResponse> {
-  const operationId = crypto.randomUUID();
-  const { data, error } = await (await responseTable())
-    .insert({
-      nickname: submission.nickname,
-      organization: submission.organization,
-      profession: submission.profession,
-      job_title: submission.jobTitle,
-    })
-    .select('id,nickname,organization,profession,job_title,created_at')
-    .single();
+function createEnvironmentRepository(): QuestionnaireRepository {
+  const target = resolveDatabaseTarget(process.env);
+  return createQuestionnaireRepository(createQuestionnairePool(target), target);
+}
 
-  if (error !== null || data === null) {
-    recordOperationFailure(operationId);
-    throw new Error('Response persistence failed.');
-  }
-
-  return toQuestionnaireResponse(data as DatabaseQuestionnaireResponse);
+export async function insertResponse(submission: QuestionnaireSubmission): Promise<QuestionnaireResponse> {
+  return createEnvironmentRepository().insertResponse(submission);
 }
 
 export async function listResponses(): Promise<QuestionnaireResponse[]> {
-  const operationId = crypto.randomUUID();
-  const { data, error } = await (await responseTable())
-    .select('id,nickname,organization,profession,job_title,created_at')
-    .order('created_at', { ascending: false });
-
-  if (error !== null || data === null) {
-    recordOperationFailure(operationId);
-    throw new Error('Response retrieval failed.');
-  }
-
-  return (data as DatabaseQuestionnaireResponse[]).map(toQuestionnaireResponse);
+  return createEnvironmentRepository().listResponses();
 }
 
 export function toResponsesCsv(rows: QuestionnaireResponse[]): string {
