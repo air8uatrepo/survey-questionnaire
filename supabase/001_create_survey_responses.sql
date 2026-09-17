@@ -9,3 +9,7 @@ create table if not exists public.survey_responses (
 
 alter table public.survey_responses enable row level security;
 revoke all on table public.survey_responses from anon, authenticated;
+grant select, insert on table public.survey_responses to service_role;
+
+create index if not exists survey_responses_created_at_idx
+  on public.survey_responses (created_at desc);
