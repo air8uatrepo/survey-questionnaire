@@ -14,4 +14,4 @@
 
 ## 部署
 
-在 Vercel 的 Production 与 Preview 环境中设置 `SUPABASE_URL`、`SUPABASE_SERVICE_ROLE_KEY` 与 `EXPORT_SECRET`。这些均是服务器变量，不要使用 `NEXT_PUBLIC_` 前缀。
+在 Vercel 的 Production 与 Preview 环境中设置 `SUPABASE_URL`、`SUPABASE_SECRET_KEY` 与 `EXPORT_SECRET`。这些均是服务器变量，不要使用 `NEXT_PUBLIC_` 前缀。
