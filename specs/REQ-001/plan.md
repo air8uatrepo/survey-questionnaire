@@ -4,9 +4,9 @@
 
 **Goal:** Build a public, demonstration-only questionnaire that persists four validated values and lets the one authenticated Business App Owner view and export those records as CSV.
 
-**Architecture:** A Next.js App Router application exposes the public form and a server-side Route Handler. The handler validates all values with one shared parser before using a server-only Supabase client to insert them into an RLS-protected table. Admin pages and admin Route Handlers first verify the Supabase Auth user matches `BUSINESS_APP_OWNER_USER_ID`, then use that same server-only client to list or export records.
+**Architecture:** A Next.js App Router application exposes the public form and a server-side Route Handler. The handler validates all values with one shared parser before using a server-only pooled PostgreSQL adapter. That adapter accepts only the fixed schema selected by the server deployment tier: `proto_survey_questionnaire_poc` for proto/preview and `app_survey_questionnaire_poc` for production. Admin pages and admin Route Handlers first verify the Supabase Auth user matches `BUSINESS_APP_OWNER_USER_ID`, then use the same server-only adapter to list or export records.
 
-**Tech Stack:** Next.js 16 App Router, React 19, TypeScript, Tailwind CSS, Supabase (`@supabase/supabase-js` and `@supabase/ssr`), Vitest, Playwright, Supabase CLI migrations.
+**Tech Stack:** Next.js 16 App Router, React 19, TypeScript, Tailwind CSS, Supabase Auth (`@supabase/supabase-js` and `@supabase/ssr`), server-only PostgreSQL pooling (`pg`), Vitest, Playwright, and platform-rendered SQL migration templates.
 
 **Spec:** `specs/REQ-001/spec.md`
 
@@ -16,9 +16,10 @@
 - The four public plain-text fields are exactly `nickname`, `organization`, `profession`, and `jobTitle`; all are required.
 - A value is valid only when `value.trim().startsWith('DEMO-REQ-001-20260918-01')` is true; validate this in the browser, the server Route Handler, and the database.
 - Never collect, persist, export, log, screenshot, or expose actual personal or business information. Do not include submitted values in error logs or HTTP error bodies.
-- Public requests use only `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`. `SUPABASE_SERVICE_ROLE_KEY` is server-only and is never placed in a `NEXT_PUBLIC_` variable, browser bundle, test report, or committed environment file.
+- The browser uses `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` for Supabase Auth only. It has no database client, database endpoint, database schema value, pooled connection string, or service-role key.
+- Database configuration is server-only: `BUSINESS_DIRECT_DATABASE_URL`, `BUSINESS_DIRECT_DEPLOYMENT_TIER`, and `BUSINESS_DIRECT_DATABASE_SCHEMA` are never `NEXT_PUBLIC_` variables, browser-bundled, logged, written to a report, or committed. The allowed pairs are exactly `proto` or `preview` with `proto_survey_questionnaire_poc`, and `production` with `app_survey_questionnaire_poc`; every other pair fails before a connection or query is opened.
 - `BUSINESS_APP_OWNER_USER_ID` is the only authorized administrator. Missing, malformed, or nonmatching authentication returns the user to `/admin/login` or returns HTTP 401/403 from an admin Route Handler.
-- Store the schema change as an additive Supabase migration. Enable RLS and create no anonymous/client read policy; all response reads and writes go through authenticated server code.
+- Store the schema change as a platform-rendered, additive SQL template. It must never create or query `public.questionnaire_responses`. Enable RLS, revoke table and schema access from `PUBLIC`, `anon`, and `authenticated`, and create no anonymous/client read policy; all response reads and writes go through the server-only adapter after application-level authorization.
 - Preserve the cumulative browser path: public submit → reload → owner login → submitted demo record visible → CSV downloaded and contains that record.
 - Internal `plan.md`, `tasks.md`, test design, and technical records do not require a business response. Only a verified preview deployment may move the workflow to `WAITING_ON_PREVIEW`.
 
@@ -34,19 +35,22 @@
 | `app/api/admin/responses/export/route.ts` | Owner-only CSV download endpoint. |
 | `src/lib/questionnaire.ts` | Shared field names, request/response types, demo-prefix parser, and safe validation result. |
 | `src/lib/responses.ts` | Server-side insert/list operations and deterministic CSV serialization. |
-| `src/lib/supabase/browser.ts`, `src/lib/supabase/server.ts`, `src/lib/supabase/service.ts` | Separate publishable browser client, cookie-aware auth client, and server-only service-role client. |
-| `supabase/migrations/` | Contains the CLI-generated `create_questionnaire_responses` additive migration with checks, RLS, and least-privilege grants. |
-| `tests/questionnaire.test.ts`, `tests/responses.test.ts` | Unit coverage of parser and CSV format using real application functions. |
+| `src/lib/supabase/browser.ts`, `src/lib/supabase/server.ts` | Separate publishable browser Auth client and cookie-aware server Auth client; neither accesses questionnaire tables. |
+| `src/lib/database/target-schema.ts`, `src/lib/database/pool.ts`, `src/lib/database/migration-template.ts` | Server-only, fail-closed tier/schema resolver, pooled PostgreSQL adapter, and pure validated-schema migration renderer; exports no client-safe database API. |
+| `supabase/migrations/manifest.json`, `supabase/migrations/templates/001_create_questionnaire_responses.sql.tmpl` | Immutable migration identity/hash and the single validated-schema SQL template executed only by the privileged Deployment adapter. |
+| `tests/questionnaire.test.ts`, `tests/responses.test.ts`, `tests/target-schema.test.ts`, `tests/migration-template.test.ts` | Unit coverage of parser, CSV, tier/schema rejection, parameterized repository queries, and migration rendering. |
 | `e2e/req-001-questionnaire.spec.ts`, `e2e/global-setup.ts` | One cumulative browser E2E path and a check that a privileged adapter has provisioned the configured synthetic owner. |
 | `playwright.config.ts`, `vitest.config.ts`, `.env.example` | Test runner configuration and variable names without secret values. |
 
 ## Data and access design
 
-Create table `public.questionnaire_responses` with `id uuid primary key default gen_random_uuid()`, four `text not null` response columns, and `created_at timestamptz not null default now()`. Add one `check` constraint per response column using the literal `DEMO-REQ-001-20260918-01%` prefix. Enable RLS. Do not grant response-table privileges to `anon` or `authenticated`; the public Route Handler and owner-only pages use the service client after application-level validation and authorization.
+The questionnaire table exists only as either `proto_survey_questionnaire_poc.questionnaire_responses` or `app_survey_questionnaire_poc.questionnaire_responses`; `public.questionnaire_responses` is forbidden. Both target schemas have the identical additive table shape: `id uuid primary key default gen_random_uuid()`, four `text not null` response columns, and `created_at timestamptz not null default now()`. Each field has a check constraint for the literal `DEMO-REQ-001-20260918-01%` prefix. RLS is enabled and the table/schema privileges for `PUBLIC`, `anon`, and `authenticated` are revoked. There is no browser database path or client policy; server code uses a pool obtained only after tier/schema validation and performs owner authorization before list/export operations.
 
-The service client is only imported by files running on the server (`import 'server-only'`). The owner page obtains the session user from the cookie-aware server client and compares `user.id` directly to `process.env.BUSINESS_APP_OWNER_USER_ID`; it never trusts client-submitted user IDs, email addresses, or metadata. The owner sign-in form performs Supabase password sign-in in the browser and redirects only to `/admin`.
+The Deployment adapter owns migration execution. Its typed `ApplyQuestionnaireMigrationIntent` has `target: 'proto' | 'production'`, an application ID, requirement ID, migration ID `REQ-001/001`, manifest SHA-256, and idempotency key; it derives, rather than accepts, the schema name (`proto` → `proto_survey_questionnaire_poc`, `production` → `app_survey_questionnaire_poc`). It replaces the single `{{TARGET_SCHEMA}}` token in the template with one of those two pre-quoted identifier literals, rejects a remaining token, a checksum mismatch, an unexpected schema, or any occurrence of `public.questionnaire_responses`, and executes in one transaction with a target-schema migration ledger and advisory lock. It records a migration only after the DDL succeeds. The current committed `public.questionnaire_responses` migration must not be deployed: before changing its unexecuted source into the template, the Deployment adapter must prove that neither target has a deployment record for it and that `to_regclass('public.questionnaire_responses')` is null. Any contrary result is an irreversible-state uncertainty and enters `NEEDS_ATTENTION`; it is never moved, dropped, or rewritten automatically.
 
-`parseQuestionnaireSubmission(input)` returns either `{ ok: true, value: QuestionnaireSubmission }` or `{ ok: false, fieldErrors: Record<QuestionnaireField, string> }`. `insertResponse(submission)` returns a `QuestionnaireResponse` without logging it. `toResponsesCsv(rows)` returns UTF-8 CSV with header `id,nickname,organization,profession,jobTitle,createdAt`, RFC 4180 quote escaping, and CRLF line endings.
+The cookie-aware server Auth client is imported only by server files (`import 'server-only'`). The owner page obtains the session user from that client and compares `user.id` directly to `process.env.BUSINESS_APP_OWNER_USER_ID`; it never trusts client-submitted user IDs, email addresses, or metadata. The owner sign-in form performs Supabase password sign-in in the browser and redirects only to `/admin`.
+
+`parseQuestionnaireSubmission(input)` returns either `{ ok: true, value: QuestionnaireSubmission }` or `{ ok: false, fieldErrors: Record<QuestionnaireField, string> }`. `resolveDatabaseTarget(env)` returns a closed `DatabaseTarget` only for the two allowed tier/schema pairs. `createQuestionnaireRepository(queryable, target)` owns the constant SQL table reference selected by that result; it never interpolates environment data or request data into SQL. Its `insertResponse(submission)` and `listResponses()` return a `QuestionnaireResponse` without logging values. `toResponsesCsv(rows)` returns UTF-8 CSV with header `id,nickname,organization,profession,jobTitle,createdAt`, RFC 4180 quote escaping, and CRLF line endings.
 
 ---
 
@@ -156,75 +160,80 @@ git add package.json package-lock.json tsconfig.json next.config.ts postcss.conf
 git commit -m "feat: bootstrap questionnaire validation"
 ```
 
-### Task 2: Add an additive, RLS-protected response store and server-only repository
+### Task 2: Correct the schema-isolated response store and server-only database adapter
 
 **Files:**
-- Create: one CLI-generated migration in `supabase/migrations/`, `src/lib/supabase/service.ts`, `src/lib/responses.ts`, `tests/responses.test.ts`
-- Modify: `package.json`
+- Create: `src/lib/database/target-schema.ts`, `src/lib/database/pool.ts`, `src/lib/database/migration-template.ts`, `supabase/migrations/manifest.json`, `supabase/migrations/templates/001_create_questionnaire_responses.sql.tmpl`, `tests/target-schema.test.ts`, `tests/migration-template.test.ts`
+- Modify: `src/lib/responses.ts`, `tests/responses.test.ts`, `package.json`, `package-lock.json`, `.env.example`
+- Delete after the Deployment adapter proves it was never applied: `supabase/migrations/20260917170344_create_questionnaire_responses.sql`, `src/lib/supabase/service.ts`
 
 **Interfaces:**
 - Consumes `QuestionnaireSubmission` and `QuestionnaireResponse` from `src/lib/questionnaire.ts`.
-- Produces `insertResponse(submission: QuestionnaireSubmission): Promise<QuestionnaireResponse>`, `listResponses(): Promise<QuestionnaireResponse[]>`, and `toResponsesCsv(rows: QuestionnaireResponse[]): string` from `src/lib/responses.ts`.
-- Consumed by the public submission Route Handler, the admin page, and the admin CSV endpoint.
+- Produces `resolveDatabaseTarget(env: NodeJS.ProcessEnv): DatabaseTarget`, `createQuestionnairePool(target: DatabaseTarget): Queryable`, `renderQuestionnaireMigration(target: DatabaseTarget, template: string): string`, and `createQuestionnaireRepository(queryable: Queryable, target: DatabaseTarget): QuestionnaireRepository`.
+- `DatabaseTarget` is exactly `{ tier: 'proto' | 'preview'; schema: 'proto_survey_questionnaire_poc'; schemaSql: '"proto_survey_questionnaire_poc"'; tableSql: '"proto_survey_questionnaire_poc"."questionnaire_responses"' } | { tier: 'production'; schema: 'app_survey_questionnaire_poc'; schemaSql: '"app_survey_questionnaire_poc"'; tableSql: '"app_survey_questionnaire_poc"."questionnaire_responses"' }`.
+- `QuestionnaireRepository` produces `insertResponse(submission: QuestionnaireSubmission): Promise<QuestionnaireResponse>` and `listResponses(): Promise<QuestionnaireResponse[]>`; `src/lib/responses.ts` re-exports those functions only from a server-only factory. It also exports `toResponsesCsv(rows: QuestionnaireResponse[]): string`.
+- The public submission Route Handler, owner page, and CSV Route Handler consume the repository functions. Browser modules consume no database module.
 
-- [ ] **Step 1: Generate the migration shell and write the failing CSV test**
+- [ ] **Step 1: Record the wrong-schema preflight and write failing target-selection tests**
 
-Use `supabase migration new create_questionnaire_responses` to create the migration filename; retain the generated timestamped filename. Before implementing `toResponsesCsv`, create `tests/responses.test.ts`:
+Before changing a migration source, request the Deployment adapter to run its read-only preflight against the shared Supabase project. It must return immutable evidence for all of these statements: `to_regclass('public.questionnaire_responses') is null`; neither `proto_survey_questionnaire_poc` nor `app_survey_questionnaire_poc` has an execution record for migration `REQ-001/001`; and no deployment operation has used the current public-schema SQL file. A missing privilege, unreadable result, non-null public table, or existing execution record is `MIGRATION_STATE_UNCERTAIN`; stop in `NEEDS_ATTENTION` and do not delete, edit, migrate, or move a table.
 
-```ts
-import { expect, it } from 'vitest';
-import { toResponsesCsv } from '@/src/lib/responses';
+Create `tests/target-schema.test.ts` before `src/lib/database/target-schema.ts`. It must assert that a `preview` tier with `proto_survey_questionnaire_poc` returns the proto `tableSql`, a `production` tier with `app_survey_questionnaire_poc` returns the app `tableSql`, and each of these independently throws `Database target configuration is invalid.`: missing `BUSINESS_DIRECT_DATABASE_URL`, missing tier, missing schema, `preview` plus app schema, `production` plus proto schema, and any `public` schema. The test passes a copied environment object and never reads a real `.env` file.
 
-it('serializes a response using RFC 4180 quoting and only demo values', () => {
-  expect(toResponsesCsv([{
-    id: '00000000-0000-4000-8000-000000000001',
-    nickname: 'DEMO-REQ-001-20260918-01-nickname',
-    organization: 'DEMO-REQ-001-20260918-01-organization, unit',
-    profession: 'DEMO-REQ-001-20260918-01-profession',
-    jobTitle: 'DEMO-REQ-001-20260918-01-"job-title"',
-    createdAt: '2026-09-18T00:00:00.000Z',
-  }])).toBe(
-    'id,nickname,organization,profession,jobTitle,createdAt\\r\\n' +
-    '00000000-0000-4000-8000-000000000001,DEMO-REQ-001-20260918-01-nickname,"DEMO-REQ-001-20260918-01-organization, unit",DEMO-REQ-001-20260918-01-profession,"DEMO-REQ-001-20260918-01-""job-title""",2026-09-18T00:00:00.000Z\\r\\n',
-  );
-});
-```
+Create or extend `tests/responses.test.ts` with a fake `Queryable` whose `query(text, values)` captures calls. Its insert/list assertions must prove the proto target emits only `"proto_survey_questionnaire_poc"."questionnaire_responses"`, the production target emits only `"app_survey_questionnaire_poc"."questionnaire_responses"`, and all four submitted values are supplied as `$1` through `$4` parameters rather than contained in SQL text.
 
-- [ ] **Step 2: Run the CSV test and observe the expected red failure**
+- [ ] **Step 2: Run the target-selection tests and observe the expected red failure**
 
-Run: `npm test -- tests/responses.test.ts`
+Run: `npm test -- tests/target-schema.test.ts tests/responses.test.ts`
 
-Expected: the command fails because `@/src/lib/responses` does not yet exist.
+Expected: the target-schema import and repository-factory assertions fail before the new server-only database contract exists. Preserve the first failure reference without values or credentials.
 
-- [ ] **Step 3: Implement the schema, server-only client, repository, and CSV serializer**
+- [ ] **Step 3: Implement the fail-closed target and pooled-query adapter**
 
-Fill the generated migration with:
+Add the pinned `pg` and `@types/pg` versions and update the lockfile. In `.env.example`, include only empty names `BUSINESS_DIRECT_DATABASE_URL=`, `BUSINESS_DIRECT_DEPLOYMENT_TIER=`, and `BUSINESS_DIRECT_DATABASE_SCHEMA=`; do not add a value, a connection example, or any secret.
 
-```sql
-create table public.questionnaire_responses (
-  id uuid primary key default gen_random_uuid(),
-  nickname text not null check (nickname like 'DEMO-REQ-001-20260918-01%'),
-  organization text not null check (organization like 'DEMO-REQ-001-20260918-01%'),
-  profession text not null check (profession like 'DEMO-REQ-001-20260918-01%'),
-  job_title text not null check (job_title like 'DEMO-REQ-001-20260918-01%'),
-  created_at timestamptz not null default now()
-);
+Place `import 'server-only';` as the first executable import in `src/lib/database/target-schema.ts` and `src/lib/database/pool.ts`. `resolveDatabaseTarget` reads only `BUSINESS_DIRECT_DATABASE_URL`, `BUSINESS_DIRECT_DEPLOYMENT_TIER`, and `BUSINESS_DIRECT_DATABASE_SCHEMA`; it accepts precisely the two object variants defined above and otherwise throws the single generic configuration error before importing `pg` or constructing a pool. It returns the matching hard-coded `tableSql` literal, never a formatted environment string.
 
-alter table public.questionnaire_responses enable row level security;
-revoke all on table public.questionnaire_responses from anon, authenticated;
-```
-
-In `src/lib/supabase/service.ts`, place `import 'server-only'` before creating `createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { persistSession: false, autoRefreshToken: false } })`. In `src/lib/responses.ts`, map `job_title`/`created_at` to the camel-case public type, throw a generic `Response persistence failed.` error after recording only an operation identifier, and implement the exact CSV escaping tested in Step 1. Add `supabase` CLI scripts only after consulting `supabase --help` and its subcommand help in the implementation turn.
-
-The repository must expose these exact functions and must not accept values outside the validated type:
+`createQuestionnairePool` creates a `pg.Pool` only after it receives a valid `DatabaseTarget`; it uses the server-only connection string with TLS required and exposes the narrow interface below. `createQuestionnaireRepository` uses its `target.tableSql` constant and PostgreSQL bind parameters for every dynamic value. It maps `job_title` and `created_at` to the existing camel-case type, logs only a generated operation identifier on a database error, and throws the existing generic persistence/retrieval errors. Delete the Supabase service-role data client. `@supabase/supabase-js` remains only for browser/server Auth clients; no route, component, or shared module may call `.from('questionnaire_responses')` or `.schema(...)`.
 
 ```ts
-export async function insertResponse(
-  submission: QuestionnaireSubmission,
-): Promise<QuestionnaireResponse>;
+export type QueryResult<Row> = { rows: Row[] };
+export interface Queryable {
+  query<Row>(text: string, values?: readonly unknown[]): Promise<QueryResult<Row>>;
+}
 
-export async function listResponses(): Promise<QuestionnaireResponse[]>;
+export type QuestionnaireRepository = {
+  insertResponse(submission: QuestionnaireSubmission): Promise<QuestionnaireResponse>;
+  listResponses(): Promise<QuestionnaireResponse[]>;
+};
 
+export function createQuestionnaireRepository(
+  queryable: Queryable,
+  target: DatabaseTarget,
+): QuestionnaireRepository {
+  return {
+    async insertResponse(submission) {
+      const result = await queryable.query<DatabaseQuestionnaireResponse>(
+        `insert into ${target.tableSql} (nickname, organization, profession, job_title) values ($1, $2, $3, $4) returning id, nickname, organization, profession, job_title, created_at`,
+        [submission.nickname, submission.organization, submission.profession, submission.jobTitle],
+      );
+      return toQuestionnaireResponse(result.rows[0]!);
+    },
+    async listResponses() {
+      const result = await queryable.query<DatabaseQuestionnaireResponse>(
+        `select id, nickname, organization, profession, job_title, created_at from ${target.tableSql} order by created_at desc`,
+      );
+      return result.rows.map(toQuestionnaireResponse);
+    },
+  };
+}
+```
+
+The required insert query is `insert into ${target.tableSql} (nickname, organization, profession, job_title) values ($1, $2, $3, $4) returning id, nickname, organization, profession, job_title, created_at`; the required list query is `select id, nickname, organization, profession, job_title, created_at from ${target.tableSql} order by created_at desc`. The interpolated part is safe because it is one of the two hard-coded `tableSql` literals returned by `resolveDatabaseTarget`; request content is always in the values array.
+
+Retain this exact CSV behavior:
+
+```ts
 export function toResponsesCsv(rows: QuestionnaireResponse[]): string {
   const quote = (value: string) =>
     /[\",\r\n]/.test(value) ? `\"${value.replaceAll('\"', '\"\"')}\"` : value;
@@ -235,21 +244,54 @@ export function toResponsesCsv(rows: QuestionnaireResponse[]): string {
 }
 ```
 
-- [ ] **Step 4: Run the CSV test and migration validation against a populated proto database**
+- [ ] **Step 4: Replace the unexecuted public migration with the validated target-schema template**
 
-Run: `npm test -- tests/responses.test.ts`
+Only after Step 1 supplies `MIGRATION_STATE_UNCERTAIN`-free evidence, remove the unexecuted public-schema file and create `supabase/migrations/templates/001_create_questionnaire_responses.sql.tmpl`. This `.sql.tmpl` extension is intentional: a generic Supabase migration runner must not execute it without the Deployment adapter's target validation. Its sole replacement token is `{{TARGET_SCHEMA}}`, which the adapter replaces exactly once with one of the two quoted identifier literals. The completed template content is:
 
-Expected: PASS.
+```sql
+create schema if not exists {{TARGET_SCHEMA}};
+revoke all on schema {{TARGET_SCHEMA}} from public, anon, authenticated;
 
-Then have the Deployment role apply the additive migration to `proto_survey_questionnaire_poc`, insert one compliant `DEMO-REQ-001-20260918-01-*` row through the server path, and verify the row can be read back. Expected: migration and data readback both succeed; no empty-schema-only migration result is accepted.
+create table if not exists {{TARGET_SCHEMA}}.questionnaire_responses (
+  id uuid primary key default gen_random_uuid(),
+  nickname text not null constraint questionnaire_responses_nickname_demo_check check (nickname like 'DEMO-REQ-001-20260918-01%'),
+  organization text not null constraint questionnaire_responses_organization_demo_check check (organization like 'DEMO-REQ-001-20260918-01%'),
+  profession text not null constraint questionnaire_responses_profession_demo_check check (profession like 'DEMO-REQ-001-20260918-01%'),
+  job_title text not null constraint questionnaire_responses_job_title_demo_check check (job_title like 'DEMO-REQ-001-20260918-01%'),
+  created_at timestamptz not null default now()
+);
 
-- [ ] **Step 5: Commit the data boundary**
+alter table {{TARGET_SCHEMA}}.questionnaire_responses enable row level security;
+revoke all on table {{TARGET_SCHEMA}}.questionnaire_responses from public, anon, authenticated;
+```
+
+Create `manifest.json` with one entry named `REQ-001/001`, template path `supabase/migrations/templates/001_create_questionnaire_responses.sql.tmpl`, and the SHA-256 computed from the committed template bytes. The Deployment adapter validates that hash before replacement. It starts a transaction, obtains an advisory transaction lock for the exact application/schema/migration tuple, reads that target schema's `business_direct_schema_migrations` ledger, applies this DDL only when the ID is absent, writes the migration ID and SHA-256 after DDL success, and commits. A duplicate matching migration record is a verified no-op; a duplicate ID with a different hash fails closed.
+
+Create `src/lib/database/migration-template.ts` with the pure `renderQuestionnaireMigration(target, template)` function used by the privileged adapter's local target-repository invocation. It accepts a `DatabaseTarget`, replaces exactly one `{{TARGET_SCHEMA}}` token with `target.schemaSql`, rejects a different token count, a result containing `public.questionnaire_responses`, or a result containing an unexpanded template token, and returns the rendered SQL. `DatabaseTarget` therefore also contains `schemaSql`, with only the hard-coded values `\"proto_survey_questionnaire_poc\"` or `\"app_survey_questionnaire_poc\"`.
+
+Create `tests/migration-template.test.ts` that calls that pure renderer. It must assert proto rendering contains only `\"proto_survey_questionnaire_poc\"` schema references and production rendering contains only `\"app_survey_questionnaire_poc\"` schema references; each rendered result contains no `{{TARGET_SCHEMA}}` and no `public.questionnaire_responses`; a request for `public` throws; and the manifest hash equals the template hash. Do not execute a migration from the application test process.
+
+- [ ] **Step 5: Run green unit verification and hand off the correct proto migration operation**
+
+Run: `npm test -- tests/target-schema.test.ts tests/migration-template.test.ts tests/responses.test.ts && npm run lint && npm run build`
+
+Expected: all pass. The evidence demonstrates that swapped/missing/public target configuration fails before a pool is opened, response values remain bound parameters, and neither application code nor a rendered migration uses the public schema.
+
+Hand the Deployment role a typed `APPLY_MIGRATION` intent with `target: 'proto'`, `schema: 'proto_survey_questionnaire_poc'`, migration ID `REQ-001/001`, the committed manifest SHA-256, and a unique idempotency key. It seeds a pre-existing compliant synthetic row before applying the template, applies it through the privileged adapter, inserts a second compliant row through the preview server path, and reads both rows through that path. It must return schema, migration ID, checksum, transaction evidence, both synthetic row identifiers, and a `COMPLIANT` safety result—never a connection string, key, or submitted value outside the approved prefix. This is an incremental populated-schema check; an empty-schema result is rejected.
+
+The production intent is not issued in this task. After `WAITING_ON_PREVIEW` receives the locally verified business confirmation, the `APPLY_PRODUCTION_MIGRATION` cursor sends the same migration ID and committed SHA-256 with `target: 'production'`; it must verify `app_survey_questionnaire_poc` before the next `MERGE_MASTER` cursor is authorized.
+
+- [ ] **Step 6: Commit the corrected data boundary**
 
 Run:
 
 ```bash
-git add supabase/migrations src/lib/supabase/service.ts src/lib/responses.ts tests/responses.test.ts package.json package-lock.json
-git commit -m "feat: add questionnaire response store"
+git add package.json package-lock.json .env.example \
+  src/lib/database/target-schema.ts src/lib/database/pool.ts src/lib/database/migration-template.ts src/lib/responses.ts \
+  supabase/migrations/manifest.json supabase/migrations/templates/001_create_questionnaire_responses.sql.tmpl \
+  tests/target-schema.test.ts tests/migration-template.test.ts tests/responses.test.ts
+git add -u -- supabase/migrations/20260917170344_create_questionnaire_responses.sql src/lib/supabase/service.ts
+git commit -m "fix: isolate questionnaire database schemas"
 ```
 
 ### Task 3: Build the public form and server-side submission route
