@@ -1,2 +1,9 @@
 .ai-app-devops/requirements/*/logs/
-.env.local
+.env*
+!.env.example
+.next/
+node_modules/
+playwright-report/
+test-results/
+next-env.d.ts
+tsconfig.tsbuildinfo
