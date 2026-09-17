@@ -9,9 +9,9 @@ requirement_id: REQ-001
 run_id: DEMO-REQ-001-20260918-01
 branch: req/REQ-001
 worktree_path: C:/aiproject/.worktrees/survey-questionnaire-poc/REQ-001
-base_sha: PENDING_BASELINE_COMMIT
+base_sha: 65a42b01551bed311797a91206e5ecfe73a1043c
 thread_id: local-codex-session-20260918
-state_revision: 2
+state_revision: 3
 repair_count: 0
 clarification_round: 3
 linear_issue_id: null

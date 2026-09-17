@@ -4,8 +4,8 @@
 
 - Product baseline: `specs/REQ-001/spec.md`.
 - Local state: `STATE.md`; append-only events: `EVENTS.md`.
-- Project is NEW. The requirement branch and worktree will be created from the
-  committed `master` SDD baseline.
+- Project is NEW. Requirement worktree `req/REQ-001` was created from master
+  baseline `65a42b01551bed311797a91206e5ecfe73a1043c`.
 - Planned defaults: TypeScript, Next.js App Router, Tailwind, Route Handlers,
   Supabase, Vercel, incremental migrations, and separate proto/app schemas.
 - Safety boundary: all values and evidence use
