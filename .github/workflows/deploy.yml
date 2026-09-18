@@ -1,0 +1,106 @@
+name: Deploy to Vercel
+
+on:
+  push:
+    branches:
+      - master
+      - 'req/**'
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Deployment target
+        required: true
+        default: preview
+        type: choice
+        options:
+          - preview
+          - production
+
+concurrency:
+  group: vercel-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy
+    runs-on: ubuntu-latest
+    env:
+      VERCEL_ORG_ID: team_ZSPeStbjuiGnXrC1XBWFklx5
+      VERCEL_PROJECT_ID: prj_z85svEiTmVjDoBxXvsiMXvwvVpWM
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Deploy to Vercel
+        id: deploy
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            target="${{ inputs.target }}"
+          elif [ "${{ github.ref_name }}" = "master" ]; then
+            target="production"
+          else
+            target="preview"
+          fi
+
+          if [ "$target" = "production" ]; then
+            environment_name="production"
+            production_flag="--prod"
+          else
+            environment_name="preview"
+            production_flag=""
+          fi
+
+          npx --yes vercel@latest pull --yes --environment="$environment_name"
+          npx --yes vercel@latest build $production_flag
+
+          # The deploying identity must be the fixed platform account in
+          # VERCEL_TOKEN. Vercel reads commit attribution from local Git
+          # metadata, and this Hobby team rejects a commit author it cannot
+          # match to a Git account, so the metadata is removed before deploy.
+          rm -rf .git
+
+          deploy_output="$(npx --yes vercel@latest deploy --prebuilt $production_flag --yes 2>&1)"
+          printf '%s\n' "$deploy_output"
+          deployment_url="$(printf '%s\n' "$deploy_output" | tr -d '\r' | grep -Eo 'https://[A-Za-z0-9._/-]+' | tail -n 1)"
+
+          if [ -z "$deployment_url" ]; then
+            echo "Could not read a deployment URL from the Vercel CLI output." >&2
+            exit 1
+          fi
+
+          echo "url=${deployment_url}" >> "$GITHUB_OUTPUT"
+          echo "target=${target}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify deployment responds
+        env:
+          DEPLOYMENT_URL: ${{ steps.deploy.outputs.url }}
+        run: |
+          set -euo pipefail
+          status="$(curl -s -o /dev/null -w '%{http_code}' "$DEPLOYMENT_URL")"
+          echo "HTTP ${status} from ${DEPLOYMENT_URL}"
+          test "$status" = "200"
+
+      - name: Summarize deployment
+        run: |
+          {
+            echo "### Vercel deployment"
+            echo ""
+            echo "- Target: ${{ steps.deploy.outputs.target }}"
+            echo "- URL: ${{ steps.deploy.outputs.url }}"
+          } >> "$GITHUB_STEP_SUMMARY"
