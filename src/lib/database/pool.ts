@@ -2,6 +2,7 @@ import 'server-only';
 
 import { Pool } from 'pg';
 import { assertDatabaseTarget, type DatabaseTarget } from './target-schema';
+import { SUPABASE_CA_PEM } from './supabase-ca';
 
 export type QueryResult<Row> = { rows: Row[] };
 
@@ -19,6 +20,6 @@ export function createQuestionnairePool(target: DatabaseTarget): Queryable {
 
   return new Pool({
     connectionString,
-    ssl: { rejectUnauthorized: true },
+    ssl: { rejectUnauthorized: true, ca: SUPABASE_CA_PEM },
   });
 }
