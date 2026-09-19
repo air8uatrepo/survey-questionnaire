@@ -12,8 +12,15 @@ type DatabaseQuestionnaireResponse = {
   organization: string;
   profession: string;
   job_title: string;
-  created_at: string;
+  created_at: string | Date;
 };
+
+// The `pg` driver materializes `timestamptz` as a `Date`, while the CSV and the
+// server-rendered admin list both need a stable text form. Normalizing here
+// keeps a raw `Date` from reaching React, which cannot render it as a child.
+function toCreatedAtText(value: string | Date): string {
+  return value instanceof Date ? value.toISOString() : value;
+}
 
 function toQuestionnaireResponse(row: DatabaseQuestionnaireResponse): QuestionnaireResponse {
   return {
@@ -22,7 +29,7 @@ function toQuestionnaireResponse(row: DatabaseQuestionnaireResponse): Questionna
     organization: row.organization,
     profession: row.profession,
     jobTitle: row.job_title,
-    createdAt: row.created_at,
+    createdAt: toCreatedAtText(row.created_at),
   };
 }
 

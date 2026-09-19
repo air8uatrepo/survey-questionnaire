@@ -74,6 +74,32 @@ it('uses the validated production table when listing responses', async () => {
   }]);
 });
 
+// The `pg` driver returns a `Date` for `timestamptz`. A string-only double hid
+// a real production crash, because React cannot render a raw `Date` as a child.
+it('normalizes a driver-returned Date into an ISO timestamp string', async () => {
+  const createdAt = new Date('2026-09-18T00:00:00.000Z');
+  const queryable: Queryable = {
+    async query<Row>() {
+      return {
+        rows: [{
+          id: '00000000-0000-4000-8000-000000000001',
+          nickname: demoSubmission.nickname,
+          organization: demoSubmission.organization,
+          profession: demoSubmission.profession,
+          job_title: demoSubmission.jobTitle,
+          created_at: createdAt,
+        }] as unknown as Row[],
+      };
+    },
+  };
+
+  const [listed] = await createQuestionnaireRepository(queryable, createTarget('preview')).listResponses();
+  expect(listed?.createdAt).toBe('2026-09-18T00:00:00.000Z');
+
+  const inserted = await createQuestionnaireRepository(queryable, createTarget('preview')).insertResponse(demoSubmission);
+  expect(inserted.createdAt).toBe('2026-09-18T00:00:00.000Z');
+});
+
 it('serializes a response using RFC 4180 quoting and only demo values', () => {
   expect(toResponsesCsv([{
     id: '00000000-0000-4000-8000-000000000001',
