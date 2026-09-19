@@ -1,16 +1,22 @@
 import { expect, test, type Page } from '@playwright/test';
 
 const DEMO_PREFIX = 'DEMO-REQ-001-20260918-01';
+
+// The shared demo database accumulates rows across runs, and the demo-prefix
+// check constraint accepts any suffix. A per-run token keeps the required
+// prefix while making the row this run created unambiguous for both the admin
+// list lookup and the "exported exactly once" assertion.
+const RUN_ID = process.env.BUSINESS_DIRECT_E2E_RUN_ID ?? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 const response = {
-  nickname: `${DEMO_PREFIX}-nickname`,
-  organization: `${DEMO_PREFIX}-organization`,
-  profession: `${DEMO_PREFIX}-profession`,
-  jobTitle: `${DEMO_PREFIX}-job-title`,
+  nickname: `${DEMO_PREFIX}-nickname-${RUN_ID}`,
+  organization: `${DEMO_PREFIX}-organization-${RUN_ID}`,
+  profession: `${DEMO_PREFIX}-profession-${RUN_ID}`,
+  jobTitle: `${DEMO_PREFIX}-job-title-${RUN_ID}`,
 };
 
 // This rejected value is intentionally ephemeral: it is never persisted,
 // exported, logged, or retained as browser evidence.
-const rejectedProfession = `INVALID-${DEMO_PREFIX}-profession`;
+const rejectedProfession = `INVALID-${DEMO_PREFIX}-profession-${RUN_ID}`;
 
 // A `status` role takes its accessible name from the author (aria-label or
 // aria-labelledby), never from its content, so a `{ name: ... }` filter can
