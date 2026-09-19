@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 const DEMO_PREFIX = 'DEMO-REQ-001-20260918-01';
 const response = {
@@ -11,6 +11,14 @@ const response = {
 // This rejected value is intentionally ephemeral: it is never persisted,
 // exported, logged, or retained as browser evidence.
 const rejectedProfession = `INVALID-${DEMO_PREFIX}-profession`;
+
+// A `status` role takes its accessible name from the author (aria-label or
+// aria-labelledby), never from its content, so a `{ name: ... }` filter can
+// never match this element. Match the status region and assert its exact
+// visible text instead. Using the name filter here silently degraded the
+// negative assertions below to a vacuous `toHaveCount(0)`.
+const successStatus = (page: Page) =>
+  page.getByRole('status').filter({ hasText: /^Submission successful$/ });
 
 function requiredOwnerEnvironment(name: 'BUSINESS_DIRECT_E2E_OWNER_EMAIL' | 'BUSINESS_DIRECT_E2E_OWNER_PASSWORD'): string {
   const value = process.env[name];
@@ -38,13 +46,13 @@ test('E2E-KP-REQ-001-001 retains the public submission through owner CSV export'
   await page.getByLabel('Profession', { exact: true }).fill(response.profession);
   await page.getByRole('button', { name: 'Submit', exact: true }).click();
   await expect(page.getByRole('alert').filter({ hasText: 'Job title is required.' })).toBeVisible();
-  await expect(page.getByRole('status', { name: 'Submission successful' })).toHaveCount(0);
+  await expect(successStatus(page)).toHaveCount(0);
 
   await page.getByLabel('Job title', { exact: true }).fill(response.jobTitle);
   await page.getByLabel('Profession', { exact: true }).fill(rejectedProfession);
   await page.getByRole('button', { name: 'Submit', exact: true }).click();
   await expect(page.getByRole('alert').filter({ hasText: `Profession must start with ${DEMO_PREFIX}.` })).toBeVisible();
-  await expect(page.getByRole('status', { name: 'Submission successful' })).toHaveCount(0);
+  await expect(successStatus(page)).toHaveCount(0);
 
   await page.reload();
   await expect(page.getByLabel('Nickname', { exact: true })).toHaveValue('');
@@ -55,7 +63,7 @@ test('E2E-KP-REQ-001-001 retains the public submission through owner CSV export'
   await page.getByLabel('Profession', { exact: true }).fill(response.profession);
   await page.getByLabel('Job title', { exact: true }).fill(response.jobTitle);
   await page.getByRole('button', { name: 'Submit', exact: true }).click();
-  await expect(page.getByRole('status', { name: 'Submission successful' })).toBeVisible();
+  await expect(successStatus(page)).toBeVisible();
 
   await page.reload();
   await expect(page.getByLabel('Nickname', { exact: true })).toHaveValue('');
